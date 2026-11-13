@@ -85,6 +85,20 @@ load: 1 thread +10-13 %, 4 threads +13 %, 8 threads +7 %, 24 threads +1 %. Statu
 not ours (a thread_call pileup), yet the scheduler path has not been run for long since, so treat `sched` as
 experimental. The author runs with it off.
 
+## Open question: the once-a-second cross-CPU call
+
+With `hwp=1` the plugin writes the per-core HWP requests through `mp_rendezvous_no_intrs`, a call that runs on every
+core with interrupts off, once a second. If any core does not answer for about two seconds, the kernel panics.
+
+On the author's Legion 5 15IAX10, several long sessions on the experimental Intel graphics driver
+([XeGfx](https://github.com/watchthelight-labs/WTLIntelGfx)) ended in such a panic after one to several hours. The
+core that panics is not the one that stopped answering, so the stacks in the report do not name the cause. What is
+not known yet: whether this plugin's call only reports a core that something else stalled, or whether it has a part
+in the stall. The A/B run with `hwp=0` (no call) is prepared and has not been run.
+
+If you see a panic that names `mp_rendezvous`, set `sudo sysctl debug.legioncpu.hwp=0` or boot with
+`-legioncpunohwp`, and please open an issue with the panic report.
+
 ## Fans (Legion 5 15IAX10)
 
 Fan modes go through Lenovo's WMI methods on the `\_SB.GZFD` ACPI device, the same calls Lenovo Vantage makes on
