@@ -68,8 +68,9 @@ Both fixes are on at boot. They can be changed at runtime, and a reboot always r
 
 Example: `sudo sysctl -w debug.legioncpu.pl=0`.
 
-Boot-args: `-legioncpunohwp`, `-legioncpunopl` and `-legioncpunofan` turn one part off, `-legioncpuoff` disables the
-plugin.
+Boot-args: `-legioncpunohwp`, `-legioncpunopl` and `-legioncpunosched` turn one part off, `-legioncpuoff` disables the
+plugin. `-legioncpunofan` only sets the fan mode to auto, which is already the default at boot, so it changes nothing
+unless something sets a fan mode later.
 
 **Heat guard.** After a minute at 100 C or more, the plugin caps the power limit at the package power it measured minus
 10 W (never below 45 W), and again after every further minute that hot. Each 30 s below 90 C raises the cap by 5 W
@@ -100,6 +101,9 @@ If you see a panic that names `mp_rendezvous`, set `sudo sysctl debug.legioncpu.
 `-legioncpunohwp`, and please open an issue with the panic report.
 
 ## Fans (Legion 5 15IAX10)
+
+The fan part is for Legion laptops only. It needs Lenovo's `\_SB.GZFD` ACPI device and does nothing on a machine
+without one; the CPU parts do not depend on it.
 
 Fan modes go through Lenovo's WMI methods on the `\_SB.GZFD` ACPI device, the same calls Lenovo Vantage makes on
 Windows: full speed is feature 0x04020000 of `WMAE`, the curve is `WMAB` methods 5 and 6 (ten fan levels in EC RAM).
