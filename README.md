@@ -46,7 +46,7 @@ throttling takes over before 120 W or 5.4 GHz is reached. Better cooling (a stan
 3. Reboot. Check it with `sysctl debug.legioncpu.status`:
 
 ```
-cpu arrow lake, xcpm hwp flag 0, hwp 1 (rewrites 24), pl 1 (heat holds 0), epp 32, pkg 61 C, mchbar mapped
+cpu arrow lake, xcpm hwp flag 0, hwp 1 (rewrites 24, passes 12, check 60 s), pl 1 (guard 1, cap 0 W, steps 0), epp 32, pkg 61 C 18 W, mchbar mapped, ...
 ```
 
 If it says `MCHBAR power limit locked`, your firmware locked the copy and only the HWP fix applies.
@@ -59,6 +59,7 @@ Both fixes are on at boot. They can be changed at runtime, and a reboot always r
 |---|---|
 | `debug.legioncpu.hwp` | 1 = per-core HWP requests from this plugin, 0 = back to XCPM |
 | `debug.legioncpu.pl` | 1 = MCHBAR limit follows MSR 0x610, 0 = the firmware's value |
+| `debug.legioncpu.hwpcheck` | seconds between checks of the HWP requests on all cores when nothing changed (default 60, 0 = never; since 0.4.2) |
 | `debug.legioncpu.epp` | energy/performance hint written with hwp=1: 0 performance ... 255 power saving (default 32) |
 | `debug.legioncpu.sched` | 1 = the scheduler prefers the two favoured P-cores and avoids the E-cores, 0 = stock (see below) |
 | `debug.legioncpu.guard` | 1 = heat guard (below), 0 = only the CPU's own thermal throttling |
@@ -86,19 +87,29 @@ load: 1 thread +10-13 %, 4 threads +13 %, 8 threads +7 %, 24 threads +1 %. Statu
 not ours (a thread_call pileup), yet the scheduler path has not been run for long since, so treat `sched` as
 experimental. The author runs with it off.
 
-## Open question: the once-a-second cross-CPU call
+## Open question: the cross-CPU call
 
 With `hwp=1` the plugin writes the per-core HWP requests through `mp_rendezvous_no_intrs`, a call that runs on every
-core with interrupts off, once a second. If any core does not answer for about two seconds, the kernel panics.
+core with interrupts off. If any core does not answer for about two seconds, the kernel panics.
 
-On the author's Legion 5 15IAX10, several long sessions on the experimental Intel graphics driver
-([XeGfx](https://github.com/watchthelight-labs/WTLIntelGfx)) ended in such a panic after one to several hours. The
-core that panics is not the one that stopped answering, so the stacks in the report do not name the cause. What is
-not known yet: whether this plugin's call only reports a core that something else stalled, or whether it has a part
-in the stall. The A/B run with `hwp=0` (no call) is prepared and has not been run.
+Up to 0.4.1 that call ran once a second. Since 0.4.2 it runs ten times after start, then only when XCPM takes the
+requests back, when `epp` changes, and every `hwpcheck` seconds (60 by default). After the first pass there is
+nothing left to write on the author's machine (`rewrites 24` after hours, one per core), so nothing is lost.
 
-If you see a panic that names `mp_rendezvous`, set `sudo sysctl debug.legioncpu.hwp=0` or boot with
-`-legioncpunohwp`, and please open an issue with the panic report.
+Why it matters: two machines have panicked with a core that did not answer such a call.
+
+- On the author's Legion 5 15IAX10, several long sessions on the experimental Intel graphics driver
+  ([XeGfx](https://github.com/watchthelight-labs/WTLIntelGfx)) ended that way after one to several hours.
+- On a tester's ThinkBook 16 G7+ (Core Ultra 5 225H) three `mp_kdp_enter() timed-out` panics on 0.4.1, one with this
+  plugin's tick in the backtrace; he reports none since he boots with `-legioncpunohwp`
+  ([issue 1](https://github.com/watchthelight-labs/WTLLegionCpuPower/issues/1)).
+
+The core that panics is not the one that stopped answering, so the stacks in the report do not name the cause. What
+stalls that core is not known. 0.4.2 asks 60 times less often; whether that is enough is not known either, since it
+has only been booted, not run for hours under load.
+
+If you see a freeze or a panic that names `mp_rendezvous` or `mp_kdp_enter`, set `sudo sysctl debug.legioncpu.hwp=0`
+or boot with `-legioncpunohwp`, and please say so in issue 1 with the panic report.
 
 ## Fans (Legion 5 15IAX10)
 

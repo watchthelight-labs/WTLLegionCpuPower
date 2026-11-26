@@ -78,8 +78,8 @@ IOMemoryMap *gMchMap;
 volatile uint32_t *gMchPl;  // MCHBAR + 0x59A0
 uint64_t gMchOriginal;
 bool gMchSaved;
-int gHwpApplied, gPlApplied;
-uint32_t gRewrites;
+int gHwpApplied, gPlApplied, gHwpCheck = 60, gEppApplied = -1;
+uint32_t gRewrites, gHwpPasses, gHwpLastPass;
 IOACPIPlatformDevice *gGzfd;
 int gFanApplied, gFanRpm1, gFanRpm2, gFanState = -1, gFanHot, gFanCool, gFanRescue, gCurveTouched;
 unsigned gTicks;
@@ -386,10 +386,19 @@ void tick(thread_call_param_t, thread_call_param_t) {
     }
     // hwp
     if (gHwp && gXcpmHwpEnabled) {
+        // a pass stops every CPU with interrupts off, so run one only when something can have changed (I-116):
+        // the first ten ticks, XCPM's flag back on, a new EPP, or every hwpcheck seconds
+        bool due = !gHwpApplied || gTicks <= 10 || *gXcpmHwpEnabled || gEpp != gEppApplied ||
+                   (gHwpCheck > 0 && gTicks - gHwpLastPass >= (uint32_t)gHwpCheck);
         *gXcpmHwpEnabled = 0;
-        HwpPass p{gEpp, 0};
-        mp_rendezvous_no_intrs(hwpPerCpu, &p);
-        gRewrites += p.changed;
+        if (due) {
+            HwpPass p{gEpp, 0};
+            mp_rendezvous_no_intrs(hwpPerCpu, &p);
+            gRewrites += p.changed;
+            gHwpPasses++;
+            gEppApplied = p.epp;
+            gHwpLastPass = gTicks;
+        }
         gHwpApplied = 1;
     } else if (!gHwp && gHwpApplied && gXcpmHwpEnabled) {
         *gXcpmHwpEnabled = 1;  // XCPM takes the request back at its next p-state change
@@ -451,11 +460,11 @@ void tick(thread_call_param_t, thread_call_param_t) {
     }
     if (strncmp(gStatus, "MCHBAR power limit locked", 25) != 0)
         snprintf(gStatus, sizeof(gStatus),
-                 "cpu %s, xcpm hwp flag %s, hwp %d (rewrites %u), pl %d (guard %d, cap %d W, steps %u), epp %d, pkg %d C %d W, "
+                 "cpu %s, xcpm hwp flag %s, hwp %d (rewrites %u, passes %u, check %d s), pl %d (guard %d, cap %d W, steps %u), epp %d, pkg %d C %d W, "
                  "mchbar %s, "
                  "fan mode %d%s, power mode 0x%x%s, full speed %s (%d / %d rpm), sched %d (%s, favoured 0x%llx, avoid 0x%llx)",
                  gCpuOk ? "arrow lake" : "unsupported", gXcpmHwpEnabled ? (*gXcpmHwpEnabled ? "1" : "0") : "missing",
-                 gHwpApplied, gRewrites, gPlApplied, gGuard, gCapW, gHolds, gEpp, temp, gPkgW,
+                 gHwpApplied, gRewrites, gHwpPasses, gHwpCheck, gPlApplied, gGuard, gCapW, gHolds, gEpp, temp, gPkgW,
                  gMchPl ? "mapped" : "not mapped", gFan, gFanRescue ? " (hot: full)" : "", gPowerMode,
                  (gFan && gPowerMode >= 0 && gPowerMode != 0xFF) ? " (custom needs AC)" : "",
                  gFanState < 0 ? "unknown" : (gFanState ? "on" : "off"), gFanRpm1,
@@ -473,11 +482,13 @@ int sysctlInt(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *
         if (v < 0 || v > 255) return EINVAL;
     } else if (arg1 == &gFan) {
         if (v < 0 || v > 3) return EINVAL;
+    } else if (arg1 == &gHwpCheck) {
+        if (v < 0 || v > 86400) return EINVAL;
     } else if (v != 0 && v != 1) {
         return EINVAL;
     }
     if (arg1 == &gHwp && v && !gXcpmHwpEnabled) return ENOTSUP;
-    if (!gCpuOk && v && arg1 != &gEpp && arg1 != &gFan) return ENOTSUP;
+    if (!gCpuOk && v && arg1 != &gEpp && arg1 != &gFan && arg1 != &gHwpCheck) return ENOTSUP;
     *static_cast<int *>(arg1) = v;
     return 0;
 }
@@ -506,7 +517,7 @@ int sysctlCurve(struct sysctl_oid *oidp, void *, int, struct sysctl_req *req) {
 
 }  // namespace
 extern struct sysctl_oid sysctl__debug_legioncpu, sysctl__debug_legioncpu_hwp, sysctl__debug_legioncpu_pl,
-    sysctl__debug_legioncpu_sched, sysctl__debug_legioncpu_guard, sysctl__debug_legioncpu_fan, sysctl__debug_legioncpu_fancurve, sysctl__debug_legioncpu_epp, sysctl__debug_legioncpu_status;
+    sysctl__debug_legioncpu_sched, sysctl__debug_legioncpu_guard, sysctl__debug_legioncpu_fan, sysctl__debug_legioncpu_fancurve, sysctl__debug_legioncpu_epp, sysctl__debug_legioncpu_hwpcheck, sysctl__debug_legioncpu_status;
 namespace {
 void pluginStart() {
     gCpuOk = arrowLake();
@@ -524,6 +535,7 @@ void pluginStart() {
     sysctl_register_oid(&sysctl__debug_legioncpu_fan);
     sysctl_register_oid(&sysctl__debug_legioncpu_fancurve);
     sysctl_register_oid(&sysctl__debug_legioncpu_epp);
+    sysctl_register_oid(&sysctl__debug_legioncpu_hwpcheck);
     sysctl_register_oid(&sysctl__debug_legioncpu_status);
     lilu.onPatcherLoadForce([](void *, KernelPatcher &patcher) {
         if (gCpuOk) {
@@ -560,6 +572,8 @@ SYSCTL_PROC(_debug_legioncpu, OID_AUTO, fancurve, CTLTYPE_STRING | CTLFLAG_RW | 
             sysctlCurve, "A", "custom fan curve for fan=2: ten comma-separated EC values");
 SYSCTL_PROC(_debug_legioncpu, OID_AUTO, epp, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &gEpp, 0,
             sysctlInt, "I", "EPP written with hwp=1 (0 performance .. 255 power saving)");
+SYSCTL_PROC(_debug_legioncpu, OID_AUTO, hwpcheck, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &gHwpCheck, 0,
+            sysctlInt, "I", "seconds between HWP passes over all CPUs when nothing changed (0 = never)");
 SYSCTL_STRING(_debug_legioncpu, OID_AUTO, status, CTLFLAG_RD | CTLFLAG_LOCKED, gStatus, sizeof(gStatus), "state");
 
 

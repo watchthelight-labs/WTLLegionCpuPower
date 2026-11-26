@@ -70,8 +70,10 @@ Three ways to fix it were considered:
   thermal handling and everything else in XCPM keep working.
 
 The plugin finds `_xcpm_hwp_enabled` with Lilu's `KernelPatcher::solveSymbol`, so it is not tied to one build's
-addresses, and it checks the request every second on every core (one `mp_rendezvous_no_intrs` pass reading two MSRs per
-core) in case any path writes it again.
+addresses, and it checks the request on every core (one `mp_rendezvous_no_intrs` pass reading two MSRs per core) in
+case any path writes it again: ten times after start, when the flag reads 1 again, when the EPP setting changes, and
+every `hwpcheck` seconds (60). Up to 0.4.1 the pass ran every second; it stops all cores, so 0.4.2 runs it only when
+something can have changed.
 
 ## Result
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.2 (2026-11-26)
+
+- The HWP check on all cores (`mp_rendezvous_no_intrs`, every core stopped with interrupts off) no longer runs every
+  second. It runs ten times after start, when XCPM takes the requests back, when `debug.legioncpu.epp` changes, and
+  every `debug.legioncpu.hwpcheck` seconds (new, default 60, 0 = never). Reason: panics with a core that did not
+  answer that call, on two machines ([issue 1](https://github.com/watchthelight-labs/WTLLegionCpuPower/issues/1)).
+  It lowers the rate; it is not shown to end the panics.
+- `debug.legioncpu.status` shows `passes N, check N s`.
+- Booted on the Legion 5 15IAX10 with macOS 26.7.3 beta (25G416): P-core and E-core ranges, scheduler masks and power
+  limit as with 0.4.1.
+
 ## 0.4.1 (2026-10-19)
 
 - `debug.legioncpu.sched` (0.4.0, on by default in the kext): the scheduler prefers the favoured P-cores and avoids the
